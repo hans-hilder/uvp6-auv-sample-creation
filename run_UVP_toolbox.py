@@ -1,6 +1,8 @@
 # %% 0. Setup
 
+import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -23,60 +25,70 @@ OUTPUT_DIR = None # Output for figures; set here to skip prompts asking for figu
 # any other alr_data.detect_profiles parameter can be added here
 PHASE_DETECTION = dict(gradient_thresholds=[0.05, -0.05],
                        cust_gradient_thresholds=[0.005, -0.005])
+# Sample file 'integrationtime': depth bin (m) of the depth-integrated samples
+# (d, u, x) and time bin (s) of the time-integrated samples (t, s)
+DEPTH_INTEGRATION = 5
+TIME_INTEGRATION = 3600
+# Folders of a UVPapp project, created in cell 3 when missing
+UVP_PROJECT_DIRS = ("calibration", "config", "CTDdata", "doc", "ecodata",
+                    "livecamera", "log", "meta", "raw", "results")
 
 prompter = TkPrompter()
 # ==========
-# %% 1. Pick and load ALR data, set figure output directory
+# %% 1. Load and parse the ALR CTD and navigation (NAV) files
 # ==========
 ctd_dir = prompter.choose_directory(
-    "Select ALR CTD data folder")
+    "Select the ALR CTD files folder")
 assert ctd_dir is not None, "cancelled"
 
 nav_dir = prompter.choose_directory(
-    "Select ALR NAV data folder")
+    "Select the ALR NAV files folder")
 assert nav_dir is not None, "cancelled"
 
 if OUTPUT_DIR is None:
-    out_dir = prompter.choose_directory("Select output folder for figures")
+    out_dir = prompter.choose_directory("Select the figures folder")
     assert out_dir is not None, "cancelled"
 else:
-    out_dir = Path(OUTPUT_DIR)
+    out_dir = OUTPUT_DIR
+out_dir = Path(out_dir)
 out_dir.mkdir(parents=True, exist_ok=True)
 
 ctd_files = sorted(alr_data.list_data_files(ctd_dir,"*.log"))
 nav_files = sorted(alr_data.list_data_files(nav_dir,"*.csv"))
 print(f"{len(ctd_files)} CTD log(s), {len(nav_files)} nav file(s)")
 
-big_df = alr_data.load_all_files(ctd_files, 
-                                 nav_files, 
+big_df = alr_data.load_all_files(ctd_files,
+                                 nav_files,
                                  verbose=True)
 big_df.write_parquet(REPO / "_cache_big_df.parquet")
 
 # ==========
-# %% 2. Profile Segmentation
+# %% 2. Identify the ALR phases (profiles, transects, transitions)
 # ==========
 df, profiles_df = alr_data.detect_profiles(big_df, **PHASE_DETECTION)
 df = alr_data.attach_profiles(df, profiles_df)
 
 fig, _ = alr_plots.plot_phase_detection(profiles_df, **PHASE_DETECTION, show=False)
-fig.savefig(Path(out_dir) / f"{ALR_SERIAL}_phase_detection.png", dpi=150)
+fig.savefig(out_dir / f"{ALR_SERIAL}_phase_detection.png", dpi=150)
 plt.show()
 
 fig, _ = alr_plots.plot_phase_sectioning(df, show=False)
-fig.savefig(Path(out_dir) / f"{ALR_SERIAL}_phase_sectioning.png", dpi=150)
+fig.savefig(out_dir / f"{ALR_SERIAL}_phase_sectioning.png", dpi=150)
 plt.show()
 
 alr_plots.check_phases(df)  # prints the phase durations and any warning
 
 # ==========
-# %% 3. Build UVP project directories
+# %% 3. Generate one netCDF file per ALR phase
 # ==========
-project = prompter.choose_directory("Select the UVP project folder")
+project = prompter.choose_directory("Select the UVP6 project folder")
 assert project is not None, "cancelled"
 project = Path(project)
 
-meta_dir = project / "doc" / f"alr_meta_sn{ALR_SERIAL_NUMBER:03d}"
-for d in ("raw", "meta", "CTDdata", "config"):
+# The ALR netCDFs go to meta/, next to the sample file: raw, config and meta
+# are the folders kept and backed up for a UVP project
+meta_dir = project / "meta" / f"alr_meta_sn{ALR_SERIAL_NUMBER:03d}"
+for d in UVP_PROJECT_DIRS:
     (project / d).mkdir(parents=True, exist_ok=True)
 meta_dir.mkdir(parents=True, exist_ok=True)
 
@@ -86,6 +98,15 @@ if not cruise_info.exists():
                            name: {CRUISE}\n",
                            encoding="latin-1")
 
+# netCDFs of a previous run are moved to archives/, as cell 4 reads every .nc of meta_dir
+old_nc = sorted(meta_dir.glob("*.nc"))
+if old_nc:
+    archive = meta_dir / "archives" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    archive.mkdir(parents=True)
+    for f in old_nc:
+        shutil.move(str(f), str(archive / f.name))
+    print(f"Moved {len(old_nc)} netCDF(s) of the previous run to {archive}")
+
 written = alr_data.export_alr_netcdf(
     df,
     alr_serial=ALR_SERIAL,
@@ -93,14 +114,16 @@ written = alr_data.export_alr_netcdf(
     max_files=None,
 )
 
-print(f"Written {len(written)} segment netCDF(s) to {meta_dir}")
+print(f"Written {len(written)} phase netCDF(s) to {meta_dir}")
 
 # ==========
-# %% 4. UVP processing
+# %% 4. Generate the UVPapp sample file (header file)
 # ==========
-sample_file = create_samples(project, 
+sample_file = create_samples(project,
                              cruise=CRUISE,
                              plots_dir=out_dir,
+                             depth_integration=DEPTH_INTEGRATION,
+                             time_integration=TIME_INTEGRATION,
                              prompter=prompter,
                              assume_yes=False)
 print(sample_file.read_text(encoding="cp1252"))

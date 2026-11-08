@@ -38,7 +38,7 @@ __all__ = [
 ]
 
 # Same colours as main/alr_plots.py and the documentation (Table 4.1)
-PHASE_COLOURS = {"d": "#2a78d6", "u": "#eb6834", "t": "#1baf7a", "s": "#eda100", "x": "#9a9994"}
+PHASE_COLOURS = {"d": "#2a78d6", "u": "#eb6834", "t": "#1baf7a", "s": "#eda100", "x": "#5f5e5a"}
 PHASE_NAMES = {"d": "Downcast", "u": "Upcast", "t": "Transect", "s": "Surface transect", "x": "Transition"}
 
 # Warning thresholds of the depth agreement

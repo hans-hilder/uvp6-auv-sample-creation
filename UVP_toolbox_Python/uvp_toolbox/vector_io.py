@@ -75,13 +75,14 @@ def read_meta_alr(nc_path) -> tuple[VectorMeta, pd.DataFrame]:
     """Read an ALR segment netCDF (as written by ``main/alr_data.py``).
 
     ``data_table`` columns: ``TIME`` (s since 1970-01-01 UTC), ``DEPTH_SCI``,
-    and ``SCI_PRESS`` / ``LAT`` / ``LON`` when present.
+    and ``SCI_PRESS`` / ``LAT`` / ``LON`` / ``TEMPERATURE`` / ``CONDUCTIVITY`` /
+    ``OXYGEN`` / ``PITCH_ENG`` / ``ROLL_ENG`` when present.
     """
     with netCDF4.Dataset(nc_path, "r") as ds:
         time_s = ncread(ds, "TIME").ravel()
         depth_sci = ncread(ds, "DEPTH_SCI").ravel()
         optional: dict[str, np.ndarray] = {}
-        for name in ("SCI_PRESS", "LAT", "LON"):
+        for name in ("SCI_PRESS", "LAT", "LON", "TEMPERATURE", "CONDUCTIVITY", "OXYGEN", "PITCH_ENG", "ROLL_ENG"):
             if name in ds.variables:
                 optional[name] = ncread(ds, name).ravel()
     cols: dict[str, np.ndarray] = {"TIME": time_s, "DEPTH_SCI": depth_sci}

@@ -542,10 +542,10 @@ def _dataset_from_group(g: pl.DataFrame) -> xr.Dataset:
 
     ds = xr.Dataset(
         data_vars={
+            # the renamed columns (#15): TEMPERATURE, CONDUCTIVITY, OXYGEN, PITCH_ENG, ROLL_ENG were dropped before
             k: (("TIME",), pdf[k].to_numpy())
-            for k in ["DEPTH_SCI", "DEPTH_ENG", "DEPTH_SCI_INTERP", "LAT", "LON",
-                      "Temperature", "Conductivity", "Oxygen", "pitch", "roll"]
-            if k in pdf.columns
+            for k in rename_map.values()
+            if k != "TIME" and k in pdf.columns
         },
         coords={"TIME": time_seconds},
     )
@@ -606,7 +606,7 @@ def export_alr_netcdf(
         df.select(subset_cols)
           .with_columns(pl.col("TIME").cast(pl.Datetime).alias("TIME"))
           .sort("TIME")
-          .with_row_count("orig_idx")
+          .with_row_index("orig_idx")
     )
 
     # ---------- Build profile groups & collect downcast starts ----------
@@ -655,7 +655,7 @@ def export_alr_netcdf(
         # Make naive-UTC datetimes for Polars join
         seg_starts = [pd.Timestamp(t).tz_convert("UTC").tz_localize(None).to_pydatetime()
                       for t in downcast_start_times_utc]
-        seg_df = pl.DataFrame({"SEG_START": seg_starts}).with_row_count("segment_id", offset=1)
+        seg_df = pl.DataFrame({"SEG_START": seg_starts}).with_row_index("segment_id", offset=1)
         sdf_with_seg = sdf.join_asof(
             seg_df.sort("SEG_START"),
             left_on="TIME", right_on="SEG_START",
@@ -675,9 +675,10 @@ def export_alr_netcdf(
     other_df = (
         sdf_with_seg
         .filter(not_flagged)
-        .select(["TIME", "position_lat", "position_lon", "DEPTH", "depth",
-                 "INTERP_DEPTH", "segment_id", "orig_idx", "Temperature",
-                 "Conductivity", "Oxygen", "pitch", "roll"])
+        .select([c for c in ["TIME", "position_lat", "position_lon", "DEPTH", "depth",
+                             "INTERP_DEPTH", "segment_id", "orig_idx", "Temperature",
+                             "Conductivity", "Oxygen", "pitch", "roll"]
+                 if c in sdf_with_seg.columns])
         .sort(["segment_id", "orig_idx"])
         .with_columns([
             # new run when segment changes OR original index is not consecutive

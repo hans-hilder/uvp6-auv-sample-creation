@@ -83,8 +83,11 @@ def write_table_tab(df: pd.DataFrame, path, encoding: str = "latin-1") -> None:
 
 def fill_ctd_table_alr(ctd_table: pd.DataFrame, data_table: pd.DataFrame) -> pd.DataFrame:
     """Fill from an ALR segment table (``TIME``, ``DEPTH_SCI``, optional
-    ``SCI_PRESS``/``LAT``/``LON``).  Pressure falls back to depth 1:1 when
-    ``SCI_PRESS`` is absent; temperature and salinity stay NaN."""
+    ``SCI_PRESS``/``LAT``/``LON``/``TEMPERATURE``/``CONDUCTIVITY``).  Pressure
+    falls back to depth 1:1 when ``SCI_PRESS`` is absent.  Temperature and
+    conductivity come from the SBE 52-MP (deg C, mS/cm); oxygen, whose unit
+    depends on the sensor set-up, and salinity stay NaN in the UVPapp columns
+    (oxygen is still written in the extra ``OXYGEN`` column)."""
     n = len(data_table)
     ctd_table = ctd_table.copy()
     if "qc flag" in ctd_table.columns:
@@ -118,6 +121,10 @@ def fill_ctd_table_alr(ctd_table: pd.DataFrame, data_table: pd.DataFrame) -> pd.
         press_vals = depth_vals  # 1 dbar ~ 1 m as requested
     if "pressure [db]" in ctd_table.columns:
         ctd_table["pressure [db]"] = press_vals
+
+    for src, col in (("TEMPERATURE", "temperature [degc]"), ("CONDUCTIVITY", "conductivity [ms cm-1]")):
+        if src in data_table.columns and col in ctd_table.columns:
+            ctd_table[col] = data_table[src].to_numpy(dtype=float)
 
     extra_cols = [c for c in data_table.columns if c != "TIME"]
     return pd.concat([ctd_table, data_table[extra_cols].reset_index(drop=True)], axis=1)

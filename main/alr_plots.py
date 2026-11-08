@@ -28,7 +28,7 @@ import numpy as np
 import polars as pl
 
 # Colour and name of each phase type, as in the documentation (Table 4.1, Figure 4.1)
-PHASE_COLOURS = {"d": "#2a78d6", "u": "#eb6834", "t": "#1baf7a", "s": "#eda100", "x": "#9a9994"}
+PHASE_COLOURS = {"d": "#2a78d6", "u": "#eb6834", "t": "#1baf7a", "s": "#eda100", "x": "#5f5e5a"}
 PHASE_NAMES = {"d": "Downcast", "u": "Upcast", "t": "Transect", "s": "Surface transect", "x": "Transition"}
 
 
@@ -244,7 +244,7 @@ def plot_phase_detection(
     types = phase_types(profiles_df, surface_thresh)
 
     def col(name):
-        return profiles_df[name].cast(pl.Float64).to_numpy()
+        return profiles_df[name].cast(pl.Float64).to_numpy().copy()  # writable: Polars 2 returns read-only arrays
 
     pos, neg = gradient_thresholds
     cpos, cneg = cust_gradient_thresholds

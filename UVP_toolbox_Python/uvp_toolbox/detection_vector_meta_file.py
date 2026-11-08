@@ -1,4 +1,4 @@
-"""Locate the vehicle metadata folder inside a UVP project's ``doc`` folder.
+"""Locate the vehicle metadata folder inside a UVP project (``meta`` for ALR, ``doc`` otherwise).
 
 Translation of ``UVP6_samples_creation/DetectionVectorMetaFile.m``.
 
@@ -43,9 +43,10 @@ def detection_vector_meta_file(project_folder, vector_type: str) -> tuple[Path, 
             raise FileNotFoundError("ERROR : No metadata folder found in \\doc")
         vector_sn = "WMO" + hits[0].name[-7:]
     elif vector_type == "ALR":
-        hits = sorted(doc.glob("alr_meta_sn*"))
+        # meta/ since #11; doc/ is still read for projects processed before
+        hits = sorted((Path(project_folder) / "meta").glob("alr_meta_sn*")) or sorted(doc.glob("alr_meta_sn*"))
         if not hits:
-            raise FileNotFoundError('ERROR : No ALR metadata folder found in \\doc (expected "alr_meta_sn*")')
+            raise FileNotFoundError('ERROR : No ALR metadata folder found in \\meta (expected "alr_meta_sn*")')
         m = re.search(r"sn(\d+)", hits[0].name)
         if m:
             vector_sn = "ALR%03d" % int(m.group(1))
