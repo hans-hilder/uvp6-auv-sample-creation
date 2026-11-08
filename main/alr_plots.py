@@ -97,6 +97,65 @@ def phase_types(df, surface_thresh=5.0):
     return types
 
 
+def phase_runs(df, surface_thresh=5.0):
+    """The phases as runs of rows, as alr_data.export_alr_netcdf writes them:
+    a new run when the phase type or the profile/transect number changes.
+
+    Returns (t, z, types, runs, seg_starts): runs = [(first row, end row, letter)],
+    seg_starts = start times of the downcasts beginning shallower than surface_thresh."""
+    t = to_datetime64(df["TIME"])
+    z = df["DEPTH"].cast(pl.Float64).to_numpy()
+    types = phase_types(df, surface_thresh)
+    pid = df["profile_num_new"].cast(pl.Float64).fill_nan(-1).fill_null(-1).to_numpy()
+    tid = df["transect_num"].cast(pl.Float64).fill_nan(-1).fill_null(-1).to_numpy()
+    group = np.where(np.isin(types, ["d", "u"]), pid, np.where(np.isin(types, ["t", "s"]), tid, -1))
+    change = np.flatnonzero((types[1:] != types[:-1]) | (group[1:] != group[:-1])) + 1
+    starts = np.r_[0, change]
+    ends = np.r_[change, types.size]
+    runs = [(s, e, types[s]) for s, e in zip(starts, ends) if types[s] != "-"]
+    seg_starts = [t[s] for s, e, k in runs if k == "d" and np.isfinite(z[s]) and z[s] < surface_thresh]
+    return t, z, types, runs, seg_starts
+
+
+def check_phases(big_df_with_profiles, surface_thresh=5.0, max_transition_min=30.0, verbose=True):
+    """Consistency checks of the sectioning; returns the warnings (also printed).
+
+    - every segment after the first (which holds the pre-dive) has an upcast;
+    - no transition is longer than max_transition_min (a missed profile or transect);
+    - the duration of each phase type, to spot thresholds that suit the deployment badly.
+    """
+    t, z, types, runs, seg_starts = phase_runs(big_df_with_profiles, surface_thresh)
+    minutes = lambda s, e: float((t[e - 1] - t[s]) / np.timedelta64(1, "m"))
+    warnings_out = []
+
+    bounds = list(seg_starts) + [t[runs[-1][1] - 1] + np.timedelta64(1, "s")] if runs else []
+    for i, (a, b) in enumerate(zip(bounds[:-1], bounds[1:]), start=1):
+        letters = {k for s, e, k in runs if a <= t[s] < b}
+        if "u" not in letters:
+            warnings_out.append(f"segment {i:04d} (starting {np.datetime_as_string(a, unit='m')}) has no upcast")
+
+    first_dive = seg_starts[0] if seg_starts else None
+    for s, e, k in runs:
+        if first_dive is not None and t[s] < first_dive:
+            continue  # segment 0000: the pre-dive, at the surface before the first downcast
+        if k == "x" and minutes(s, e) > max_transition_min:
+            warnings_out.append(f"transition of {minutes(s, e):.0f} min starting {np.datetime_as_string(t[s], unit='m')}"
+                                f" (> {max_transition_min:g} min: a missed profile or transect?)")
+
+    if verbose:
+        print(f"--- Phase checks: {len(runs)} phases, {len(seg_starts) + 1} segments ---")
+        for k in PHASE_COLOURS:
+            d = [minutes(s, e) for s, e, kk in runs if kk == k]
+            if d:
+                print(f"  {k} – {PHASE_NAMES[k]:<16} {len(d):4d} phases, duration median {np.median(d):6.1f} min,"
+                      f" range {min(d):.1f}–{max(d):.1f} min")
+        for w in warnings_out:
+            print(f"  WARNING: {w}")
+        if not warnings_out:
+            print("  no warning")
+    return warnings_out
+
+
 def _scatter_by_phase(ax, t, y, types, ms=1.5):
     for k, colour in PHASE_COLOURS.items():
         m = types == k
@@ -334,21 +393,7 @@ def plot_phase_sectioning(big_df_with_profiles, surface_thresh=5.0, show=True):
     one block per phase (one block = one netCDF file = one sample), with the
     segment boundaries (a new segment at each downcast starting shallower than
     surface_thresh)."""
-    df = big_df_with_profiles
-    t = to_datetime64(df["TIME"])
-    z = df["DEPTH"].cast(pl.Float64).to_numpy()
-    types = phase_types(df, surface_thresh)
-
-    # Phase runs: a new run when the phase type or the profile/transect number changes
-    pid = df["profile_num_new"].cast(pl.Float64).fill_nan(-1).fill_null(-1).to_numpy()
-    tid = df["transect_num"].cast(pl.Float64).fill_nan(-1).fill_null(-1).to_numpy()
-    group = np.where(np.isin(types, ["d", "u"]), pid, np.where(np.isin(types, ["t", "s"]), tid, -1))
-    change = np.flatnonzero((types[1:] != types[:-1]) | (group[1:] != group[:-1])) + 1
-    starts = np.r_[0, change]
-    ends = np.r_[change, types.size]
-    runs = [(s, e, types[s]) for s, e in zip(starts, ends) if types[s] != "-"]
-
-    seg_starts = [t[s] for s, e, k in runs if k == "d" and np.isfinite(z[s]) and z[s] < surface_thresh]
+    t, z, types, runs, seg_starts = phase_runs(big_df_with_profiles, surface_thresh)
     counts = {k: sum(1 for *_, kk in runs if kk == k) for k in PHASE_COLOURS}
 
     fig, (ax, ax_s) = plt.subplots(2, 1, figsize=(16, 8), height_ratios=[5, 1],

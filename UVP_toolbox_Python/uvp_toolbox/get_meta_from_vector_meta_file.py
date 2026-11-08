@@ -75,6 +75,8 @@ class AlrMatch:
     skipped_count: int
     total_alr: int
     ctd_failures: list[tuple[str, str]] = field(default_factory=list)
+    # Every ALR phase file, matched or not: name, letter, start, end, n_images (0 = no UVP image)
+    phases: list[dict] = field(default_factory=list)
 
 
 def _fmt04(x: float) -> str:
@@ -305,6 +307,8 @@ def get_meta_alr(
     plot_time: list[np.ndarray] = []
     plot_depth: list[np.ndarray] = []
     ctd_failures: list[tuple[str, str]] = []
+    phases: list[dict] = []           # every file, for the coverage check
+    matched_phases: list[dict] = []   # the matched ones, in the order of the accumulators
     skipped_count = 0
 
     for k, path in enumerate(files, start=1):
@@ -313,6 +317,10 @@ def get_meta_alr(
         meta, data = read_meta_alr(path)
         t_alr = meta.time
         t_ok = finite_times(t_alr)
+        phase = {"name": path.stem, "letter": parse_alr_filename(path.name)[2],
+                 "start": t_ok.min() if t_ok.size else None, "end": t_ok.max() if t_ok.size else None,
+                 "n_images": 0}
+        phases.append(phase)
         if t_ok.size == 0:
             skipped_count += 1
             continue
@@ -323,6 +331,7 @@ def get_meta_alr(
         if best_seq is None:
             skipped_count += 1
             continue
+        matched_phases.append(phase)
 
         sidx = int(best_idx[0])
         eidx = int(best_idx[-1])
@@ -356,6 +365,8 @@ def get_meta_alr(
             plot_depth.append(data["DEPTH_SCI"].to_numpy(dtype=float))
 
     end_idx = enforce_non_overlapping_indices(np.array(sidx_acc, dtype=int), np.array(eidx_acc, dtype=int), np.array(seq_acc, dtype=int))
+    for phase, s, e in zip(matched_phases, sidx_acc, end_idx):
+        phase["n_images"] = int(e) - int(s) + 1
 
     if not name_acc:
         warnings.warn(f"No ALR samples matched any UVP times within +/-{num2str(tolerance_seconds)} s.")
@@ -375,4 +386,5 @@ def get_meta_alr(
         skipped_count=skipped_count,
         total_alr=total_alr,
         ctd_failures=ctd_failures,
+        phases=phases,
     )

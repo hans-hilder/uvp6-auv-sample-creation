@@ -24,6 +24,7 @@ import numpy as np
 
 from .detection_vector_meta_file import detection_vector_meta_file
 from .diagnostics import make_timedepth_plots, sampling_interval_diagnostics
+from .qc import run_alr_qc
 from .get_meta_from_vector_meta_file import get_meta_alr, get_meta_from_vector_meta_file, parse_alr_filename
 from .matlab_compat import datestr_yyyymmdd_HHMMSS, num2str
 from .usable_depth_limit import usable_depth_limit
@@ -300,6 +301,7 @@ def create_samples(
     deep_black_limit: float = 100.0,
     plots_dir=None,
     make_plots: bool = True,
+    qc_min_images: int = 20,
     assume_yes: bool = False,
     prompter: Optional[Prompter] = None,
     verbose: bool = False,
@@ -310,7 +312,8 @@ def create_samples(
     (pressure difference identifying float parkings, 70 with margins) and
     ``deep_black_limit`` (depth below which the black level is instrumental,
     100 m).  ``cruise`` overrides ``config/cruise_info.txt``; ``plots_dir``
-    is asked for with the ``prompter`` when not given.
+    is asked for with the ``prompter`` when not given.  ``qc_min_images`` is the
+    sample size below which the quality checks report a sample as small (ALR only).
     """
     if project_folder is None:
         print("Select UVP project folder ")
@@ -375,6 +378,8 @@ def create_samples(
 
     rows: list[SampleRow] = []
     alr_time = alr_depth = None
+    res = None
+    qc_samples: list[tuple[str, str, int]] = []  # (sample, phase letter, images) for the quality checks
     if vector_type != "ALR":
         match = get_meta_from_vector_meta_file(
             vector_type, meta_data_folder, project_folder, ref_time_list,
@@ -399,6 +404,7 @@ def create_samples(
             else:
                 sample_type, integration_time = "T", 1.0
             station_id = "segment_NaN" if math.isnan(seg_id) else f"segment_{int(seg_id)}"
+            qc_samples.append((res.sample_names[i], letter, int(res.end_idx[i]) - int(res.start_idx[i]) + 1))
             rows.append(SampleRow(
                 cruise=cruise_name, ship=vector_sn, filename=s.name, profileid=res.sample_names[i],
                 latitude=float(res.lat[i]), longitude=float(res.lon[i]),
@@ -441,5 +447,10 @@ def create_samples(
             sampling_interval_diagnostics(outdir, uvp_time_series, alr_time)
         except Exception as exc:
             print(f"Sampling interval diagnostics skipped: {exc}")
+        if res is not None:
+            try:
+                run_alr_qc(outdir, uvp_time_series, uvp_depth_series, res, qc_samples, min_images=qc_min_images)
+            except Exception as exc:
+                print(f"Quality checks skipped: {exc}")
 
     return sample_path

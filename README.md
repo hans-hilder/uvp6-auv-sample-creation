@@ -121,7 +121,11 @@ Near the end of cell 4, two lines summarise CTD/NAV file and UVP image matching:
 ├── uvp_alr_timedepth_fullspan.png
 ├── uvp_alr_sampling_intervals.png
 ├── daily_plots/uvp_alr_timedepth_<date>.png
-└── overview_plots/uvp_alr_timedepth_all_days.png
+├── overview_plots/uvp_alr_timedepth_all_days.png
+├── uvp_alr_depth_agreement.png         # cell 4, quality checks
+├── uvp_alr_phase_coverage.png
+├── uvp_alr_sample_sizes.png
+└── qc_summary.txt
 ```
 
 Cell 1 saves the merged ALR data to `_cache_big_df.parquet` within the repository directory .
@@ -138,6 +142,14 @@ s surface transect, x transition.
 | `ALR004_phase_sectioning.png` | The deployment coloured by phase, the count of each phase type, and one block per phase (one phase = one netCDF file = one sample), with the segment boundaries. | Each dive split into a downcast and an upcast, no missed profile, no fragmented transect. |
 | `uvp_alr_timedepth.png`, `…_fullspan.png`, `daily_plots/`, `overview_plots/` | UVP (dots) and ALR (line) depth, the UVP − ALR depth difference (10 s medians), and, in `…_fullspan.png`, the ALR → UVP clock offset of each 31 × 10 s window, coloured by r²; the median over reliable windows (r² ≥ 0.9) is printed and drawn. | A constant depth difference points to a pressure offset, a difference growing with depth to a scale difference, and a non-zero median offset to a clock offset. |
 | `uvp_alr_sampling_intervals.png` | Distribution of the time between two UVP images and two ALR records. | Gaps or irregular sampling. |
+| `uvp_alr_depth_agreement.png` | UVP − ALR depth against ALR depth (10 s medians), with the fit UVP − ALR = scale × depth + offset + lag × vertical velocity, over the deployment and per day. | A WARNING when \|scale\| > 0.5 %, \|offset\| > 0.5 m or \|lag\| > 1 s. A scale near +1.97 % is what a UVP depth in mH₂O against an ALR pressure in dbar gives. A lag that grows day after day is a drifting clock. |
+| `uvp_alr_phase_coverage.png` | Every ALR phase on a time line, by type: coloured when it has UVP images, grey with a red outline when it has none. | Periods without UVP data; phases that should have had images. |
+| `uvp_alr_sample_sizes.png` | Images per sample, by phase type, with the `qc_min_images` limit of `create_samples` (20 by default). | Very small samples, usually transitions, not worth processing in UVPapp. |
+
+The quality checks of cell 4 are also printed and written to `qc_summary.txt`. Cell 2 prints the
+phase checks of `alr_plots.check_phases`: the duration of each phase type, a warning for a segment
+without an upcast, and a warning for a transition longer than 30 min.
+
 ## Re-running
 
 - **After editing code in `main/` or `UVP_toolbox_Python/`**, restart the

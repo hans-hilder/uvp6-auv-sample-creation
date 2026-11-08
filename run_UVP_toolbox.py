@@ -66,6 +66,8 @@ fig, _ = alr_plots.plot_phase_sectioning(df, show=False)
 fig.savefig(Path(out_dir) / f"{ALR_SERIAL}_phase_sectioning.png", dpi=150)
 plt.show()
 
+alr_plots.check_phases(df)  # prints the phase durations and any warning
+
 # ==========
 # %% 3. Build UVP project directories
 # ==========
