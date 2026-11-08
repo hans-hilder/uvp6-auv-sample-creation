@@ -40,6 +40,7 @@ __all__ = [
 C_UVP = "#0072BD"
 C_ALR = "#D95319"
 C_LAG = "#FF0000"
+C_GAP = "#b3261e"   # periods without UVP image, as on the QC coverage map
 # Lag windows whose best r² is below this are flat-depth stretches: their lag is noise
 LAG_R2_MIN = 0.9
 
@@ -269,6 +270,18 @@ def _plot_bottom(ax, start, end, centers, depth_diff, lw=1.0, ylabel="UVP − AL
     ax.set_ylabel(ylabel)
 
 
+def _shade_gaps(ax, gaps, start, end, label=False):
+    """Shade the periods without UVP image (``gaps`` = (start, end) pairs) that
+    fall in the window."""
+    shown = False
+    for g0, g1 in gaps:
+        if g1 < start or g0 > end:
+            continue
+        ax.axvspan(_pydt(max(g0, start)), _pydt(min(g1, end)), color=C_GAP, alpha=0.12, lw=0, zorder=0,
+                   label="no UVP image" if label and not shown else "_nolegend_")
+        shown = True
+
+
 def _time_axis(ax):
     locator = mdates.AutoDateLocator()
     ax.xaxis.set_major_locator(locator)
@@ -276,11 +289,13 @@ def _time_axis(ax):
 
 
 def plot_one_day(ax_top, ax_bot, day_start, day_end, uvp_time_series, uvp_depth_series,
-                 have_alr, t_alr, z_alr, centers, depth_diff, title=None):
+                 have_alr, t_alr, z_alr, centers, depth_diff, title=None, gaps=()):
     """The MATLAB ``plot_one_day`` helper: depths on top, UVP − ALR depth
-    difference below, x axes linked."""
+    difference below, x axes linked; periods without UVP image shaded red."""
     if title is None:
         title = f"UVP & ALR depth – {_ts(day_start):%Y-%m-%d}"
+    _shade_gaps(ax_top, gaps, day_start, day_end, label=True)
+    _shade_gaps(ax_bot, gaps, day_start, day_end)
     _plot_top(ax_top, day_start, day_end, uvp_time_series, uvp_depth_series, have_alr, t_alr, z_alr,
               title=title)
     _plot_bottom(ax_bot, day_start, day_end, centers, depth_diff)
@@ -297,8 +312,14 @@ def plot_one_day(ax_top, ax_bot, day_start, day_end, uvp_time_series, uvp_depth_
 # ---------------------------------------------------------------------------
 
 def make_timedepth_plots(outdir, uvp_time_series: Sequence, uvp_depth_series: Sequence,
-                         alr_time=None, alr_depth=None, verbose: bool = True) -> dict[str, Path]:
-    """Write every time-depth diagnostic figure and return their paths."""
+                         alr_time=None, alr_depth=None, verbose: bool = True, gaps=()) -> dict[str, Path]:
+    """Write every time-depth diagnostic figure and return their paths.
+
+    ``gaps``: (start, end) datetime64 pairs of the periods without UVP image
+    (``qc.coverage_gaps``), shaded on every figure.
+    """
+    # whole seconds, so that the conversion to Python datetimes for axvspan is exact
+    gaps = [(np.datetime64(a, "s").astype("datetime64[ns]"), np.datetime64(b, "s").astype("datetime64[ns]")) for a, b in gaps]
     outdir = Path(outdir)
     daily_dir = outdir / "daily_plots"
     overview_dir = outdir / "overview_plots"
@@ -333,7 +354,7 @@ def make_timedepth_plots(outdir, uvp_time_series: Sequence, uvp_depth_series: Se
     # ---- (1) combined 2-panel figure
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 7.5), constrained_layout=True)
     plot_one_day(ax1, ax2, data_start, data_end, uvp_time_series, uvp_depth_series,
-                 have_alr, t_alr, z_alr, centers, depth_diff, title=f"UVP & ALR depth – {span}")
+                 have_alr, t_alr, z_alr, centers, depth_diff, title=f"UVP & ALR depth – {span}", gaps=gaps)
     fig.canvas.manager.set_window_title("UVP & ALR depth")
     out = outdir / "uvp_alr_timedepth.png"
     fig.savefig(out, dpi=150)
@@ -347,8 +368,9 @@ def make_timedepth_plots(outdir, uvp_time_series: Sequence, uvp_depth_series: Se
     # ---- (2) full-span 3-panel figure, with the clock offset
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10.5), constrained_layout=True)
     plot_one_day(ax1, ax2, data_start, data_end, uvp_time_series, uvp_depth_series,
-                 have_alr, t_alr, z_alr, centers, depth_diff, title=f"UVP & ALR depth – {span}")
+                 have_alr, t_alr, z_alr, centers, depth_diff, title=f"UVP & ALR depth – {span}", gaps=gaps)
     ax3.grid(True, color="0.9")
+    _shade_gaps(ax3, gaps, data_start, data_end)
     reliable = lag_r2 >= LAG_R2_MIN
     offset_text = "no window with a reliable fit"
     if lag_best_sec.size:
@@ -396,7 +418,7 @@ def make_timedepth_plots(outdir, uvp_time_series: Sequence, uvp_depth_series: Se
             continue
         fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(12, 7.5), constrained_layout=True)
         plot_one_day(ax_top, ax_bot, ds, de, uvp_time_series, uvp_depth_series,
-                     have_alr, t_alr, z_alr, centers, depth_diff)
+                     have_alr, t_alr, z_alr, centers, depth_diff, gaps=gaps)
         out = daily_dir / f"uvp_alr_timedepth_{_ts(ds):%Y-%m-%d}.png"
         fig.savefig(out, dpi=150)
         plt.close(fig)
@@ -419,6 +441,8 @@ def make_timedepth_plots(outdir, uvp_time_series: Sequence, uvp_depth_series: Se
             r, c = divmod(i, cols)
             ax_top = fig.add_subplot(gs[2 * r, c])
             ax_bot = fig.add_subplot(gs[2 * r + 1, c])
+            _shade_gaps(ax_top, gaps, ds, de)
+            _shade_gaps(ax_bot, gaps, ds, de)
             _plot_top(ax_top, ds, de, uvp_time_series, uvp_depth_series, have_alr, t_alr, z_alr,
                       uvp_ms=1, alr_lw=0.75, legend=(i == 0), title=f"{_ts(ds):%Y-%m-%d}")
             ax_top.set_xlabel("")

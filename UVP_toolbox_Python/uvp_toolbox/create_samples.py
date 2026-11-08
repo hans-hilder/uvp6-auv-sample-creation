@@ -24,7 +24,7 @@ import numpy as np
 
 from .detection_vector_meta_file import detection_vector_meta_file
 from .diagnostics import make_timedepth_plots, sampling_interval_diagnostics
-from .qc import run_alr_qc
+from .qc import coverage_gaps, run_alr_qc
 from .get_meta_from_vector_meta_file import get_meta_alr, get_meta_from_vector_meta_file, parse_alr_filename
 from .matlab_compat import datestr_yyyymmdd_HHMMSS, num2str
 from .usable_depth_limit import usable_depth_limit
@@ -449,7 +449,11 @@ def create_samples(
     if make_plots:
         outdir = Path(plots_dir)
         try:
-            make_timedepth_plots(outdir, uvp_time_series, uvp_depth_series, alr_time, alr_depth)
+            gaps = []
+            if res is not None:  # periods without UVP image, shaded on the time-depth figures
+                t_uvp = np.concatenate([np.asarray(t, dtype="datetime64[ns]").ravel() for t in uvp_time_series])
+                gaps = [(g.start, g.end) for g in coverage_gaps(res.phases, t_uvp)[0]]
+            make_timedepth_plots(outdir, uvp_time_series, uvp_depth_series, alr_time, alr_depth, gaps=gaps)
         except Exception as exc:  # the MATLAB block is wrapped the same way
             print(f"Plotting skipped: {exc}")
         try:

@@ -37,6 +37,9 @@ from .vector_io import (
     read_meta_seaglider,
 )
 
+# GPS points kept per ALR phase for the coverage map
+TRACK_POINTS = 200
+
 __all__ = [
     "VectorMatch",
     "AlrMatch",
@@ -70,12 +73,13 @@ class AlrMatch:
     end_idx: np.ndarray                 # 0-based last UVP image
     start_time: np.ndarray              # datetime64[ns] of the first matched image
     assigned_uvp_seq_idx: np.ndarray    # 0-based index into the UVP sequence list
-    alr_plot_time: np.ndarray           # concatenated ALR times (for diagnostics)
+    alr_plot_time: np.ndarray           # concatenated ALR times of every phase, matched or not (for diagnostics)
     alr_plot_depth: np.ndarray          # concatenated DEPTH_SCI
     skipped_count: int
     total_alr: int
     ctd_failures: list[tuple[str, str]] = field(default_factory=list)
-    # Every ALR phase file, matched or not: name, letter, start, end, n_images (0 = no UVP image)
+    # Every ALR phase file, matched or not: name, letter, start, end, n_images (0 = no UVP image),
+    # and its GPS track (track_time, track_lat, track_lon, at most TRACK_POINTS points)
     phases: list[dict] = field(default_factory=list)
 
 
@@ -324,6 +328,15 @@ def get_meta_alr(
         if t_ok.size == 0:
             skipped_count += 1
             continue
+        # every phase, so that the diagnostics show the ALR where the UVP has no image
+        if "DEPTH_SCI" in data.columns:
+            plot_time.append(np.asarray(t_alr, dtype="datetime64[ns]"))
+            plot_depth.append(data["DEPTH_SCI"].to_numpy(dtype=float))
+        gps = np.flatnonzero(~np.isnan(meta.lat) & ~np.isnan(meta.lon) & ~np.isnat(np.asarray(t_alr, dtype="datetime64[ns]")))
+        gps = gps[::max(1, gps.size // TRACK_POINTS)]
+        phase.update(track_time=np.asarray(t_alr, dtype="datetime64[ns]")[gps],
+                     track_lat=np.asarray(meta.lat, dtype=float)[gps],
+                     track_lon=np.asarray(meta.lon, dtype=float)[gps])
 
         tmin = t_ok.min() - tol
         tmax = t_ok.max() + tol
@@ -359,10 +372,6 @@ def get_meta_alr(
                 create_ctd_file(project_folder, data, base + ".csv", "ALR")
             except Exception as exc:  # MATLAB swallows this silently; we record it
                 ctd_failures.append((path.name, f"{type(exc).__name__}: {exc}"))
-
-        if "DEPTH_SCI" in data.columns:
-            plot_time.append(np.asarray(t_alr, dtype="datetime64[ns]"))
-            plot_depth.append(data["DEPTH_SCI"].to_numpy(dtype=float))
 
     end_idx = enforce_non_overlapping_indices(np.array(sidx_acc, dtype=int), np.array(eidx_acc, dtype=int), np.array(seq_acc, dtype=int))
     for phase, s, e in zip(matched_phases, sidx_acc, end_idx):

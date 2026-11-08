@@ -2,20 +2,23 @@
 
 Not a MATLAB translation: these checks were added to the Python port.
 
-    depth_agreement   scale, offset and clock lag between the UVP and ALR depths
-    plot_phase_coverage   which ALR phases received UVP images
-    plot_sample_sizes     number of images per sample, by phase type
+    depth_agreement     scale, offset and clock lag between the UVP and ALR depths
+    coverage_gaps       when and where the ALR ran without UVP images
+    plot_coverage_map   the ALR track with those gaps, and the phases on a time line
+    plot_sample_sizes   number of images per sample, by phase type
 
-Writes these figures, and a text summary:
+Writes these figures, a table of the gaps, and a text summary:
 
     <outdir>/uvp_alr_depth_agreement.png
-    <outdir>/uvp_alr_phase_coverage.png
+    <outdir>/uvp_alr_coverage_map.png
     <outdir>/uvp_alr_sample_sizes.png
+    <outdir>/qc_coverage.csv
     <outdir>/qc_summary.txt
 """
 
 from __future__ import annotations
 
+import csv
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,12 +30,16 @@ import numpy as np
 
 from .diagnostics import BinnedDepths, bin_depths, _concat_series, _day_floor
 from .get_meta_from_vector_meta_file import AlrMatch
+from .matlab_compat import finite_times
 
 __all__ = [
     "DepthAgreement",
     "depth_agreement",
     "plot_depth_agreement",
-    "plot_phase_coverage",
+    "CoverageGap",
+    "coverage_gaps",
+    "coverage_table",
+    "plot_coverage_map",
     "plot_sample_sizes",
     "run_alr_qc",
 ]
@@ -47,6 +54,9 @@ OFFSET_TOL_M = 0.5      # |offset| above this: sensor zero, or distance between 
 LAG_TOL_S = 1.0         # |lag| above this: clock offset between the UVP and the ALR
 # A depth in metres of fresh water (mH2O) against a pressure in dbar reads this much deeper
 MH2O_PER_DBAR_PCT = 1.97
+# Consecutive phases without UVP image are listed as a gap from this duration on
+MIN_GAP_HOURS = 1.0
+C_GAP = "#b3261e"
 
 
 # ---------------------------------------------------------------------------
@@ -165,40 +175,211 @@ def plot_depth_agreement(out: Path, binned: BinnedDepths, agr: DepthAgreement) -
 
 
 # ---------------------------------------------------------------------------
-# 2. Phase coverage: which ALR phases received UVP images
+# 2. Coverage: when and where the ALR ran without UVP images
 # ---------------------------------------------------------------------------
 
-def plot_phase_coverage(out: Path, phases: Sequence[dict]) -> tuple[Path, str]:
-    """One row per phase type, one bar per ALR phase: coloured when it has UVP
-    images, grey with a red outline when it has none."""
+def _km(lat, lon) -> float:
+    """Length (km) of a lat/lon track, great circles between points."""
+    lat, lon = np.radians(np.asarray(lat, float)), np.radians(np.asarray(lon, float))
+    if lat.size < 2:
+        return 0.0
+    a = (np.sin(np.diff(lat) / 2) ** 2
+         + np.cos(lat[:-1]) * np.cos(lat[1:]) * np.sin(np.diff(lon) / 2) ** 2)
+    return float(6371.0 * 2 * np.arcsin(np.sqrt(np.clip(a, 0, 1))).sum())
+
+
+def _track(phases: Sequence[dict]):
+    """Time, lat, lon of the phases' GPS tracks, in time order."""
+    parts = [p for p in phases if p.get("track_time") is not None and len(p["track_time"])]
+    if not parts:
+        return np.array([], "datetime64[ns]"), np.array([]), np.array([])
+    t = np.concatenate([p["track_time"] for p in parts])
+    order = np.argsort(t, kind="stable")
+    return (t[order], np.concatenate([p["track_lat"] for p in parts])[order],
+            np.concatenate([p["track_lon"] for p in parts])[order])
+
+
+@dataclass
+class CoverageGap:
+    """A run of consecutive ALR phases without UVP image, from the last UVP
+    image before it to the first one after it."""
+    start: np.datetime64
+    end: np.datetime64
+    phases: list[dict]
+    lat: np.ndarray         # ALR track from start to end, both ends interpolated
+    lon: np.ndarray
+
+    @property
+    def hours(self) -> float:
+        return float((self.end - self.start) / np.timedelta64(1, "s")) / 3600
+
+    def row(self, k: int) -> dict:
+        """One line of qc_coverage.csv."""
+        pos = lambda v, i: f"{v[i]:.4f}" if v.size else ""
+        n = Counter(p["letter"] for p in self.phases)
+        return {"gap": f"G{k}", "start": str(self.start)[:19], "end": str(self.end)[:19],
+                "duration_h": f"{self.hours:.1f}", "start_lat": pos(self.lat, 0), "start_lon": pos(self.lon, 0),
+                "end_lat": pos(self.lat, -1), "end_lon": pos(self.lon, -1),
+                "distance_km": f"{_km(self.lat, self.lon):.1f}",
+                "phases": len(self.phases), **{c: n[c] for c in PHASE_COLOURS}}
+
+
+def coverage_gaps(phases: Sequence[dict], uvp_times=None, min_hours: float = MIN_GAP_HOURS
+                  ) -> tuple[list[CoverageGap], list[CoverageGap]]:
+    """Group the time-ordered phases without UVP image into runs; return the
+    runs of at least ``min_hours`` (the gaps) and the shorter ones apart: a
+    short transition without image is not a loss of data.
+
+    With ``uvp_times`` (every UVP image time), a run is widened to the last
+    image before it and the first image after it, as the images can stop or
+    start again inside a phase that has some.
+    """
+    rows = sorted((p for p in phases if p["start"] is not None), key=lambda p: p["start"])
+    runs, cur = [], []
+    for p in rows:
+        if p["n_images"] == 0:
+            cur.append(p)
+        elif cur:
+            runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+
+    uvp = np.sort(finite_times(np.asarray(uvp_times, dtype="datetime64[ns]").ravel())) if uvp_times is not None else None
+    t_all, lat_all, lon_all = _track(rows)
+    sec = lambda t: (np.asarray(t, dtype="datetime64[ns]") - np.datetime64(0, "ns")) / np.timedelta64(1, "s")
+    gaps = []
+    for r in runs:
+        start, end = r[0]["start"], r[-1]["end"]
+        if uvp is not None and uvp.size:
+            i = np.searchsorted(uvp, start)
+            if i > 0:
+                start = uvp[i - 1]
+            j = np.searchsorted(uvp, end, side="right")
+            if j < uvp.size:
+                end = uvp[j]
+        inside = (t_all > start) & (t_all < end)
+        if t_all.size:
+            ends = sec(np.array([start, end], dtype="datetime64[ns]"))
+            lat = np.r_[np.interp(ends[0], sec(t_all), lat_all), lat_all[inside], np.interp(ends[1], sec(t_all), lat_all)]
+            lon = np.r_[np.interp(ends[0], sec(t_all), lon_all), lon_all[inside], np.interp(ends[1], sec(t_all), lon_all)]
+        else:
+            lat = lon = np.array([])
+        gaps.append(CoverageGap(start, end, r, lat, lon))
+    return [g for g in gaps if g.hours >= min_hours], [g for g in gaps if g.hours < min_hours]
+
+
+def coverage_table(phases: Sequence[dict], gaps: Sequence[CoverageGap], short: Sequence[CoverageGap],
+                   min_hours: float = MIN_GAP_HOURS) -> list[str]:
+    """The deployment, the phases by type and the gaps, as lines of qc_summary.txt."""
     rows = [p for p in phases if p["start"] is not None]
-    n_all, n_miss = len(phases), sum(1 for p in phases if p["n_images"] == 0)
-    by_type = Counter(p["letter"] for p in phases if p["n_images"] == 0)
-    fig, ax = plt.subplots(figsize=(14, 4), constrained_layout=True)
-    letters = list(PHASE_COLOURS)
-    for i, k in enumerate(letters):
+    t0, t1 = min(p["start"] for p in rows), max(p["end"] for p in rows)
+    days = float((t1 - t0) / np.timedelta64(1, "s")) / 86400
+    _, lat, lon = _track(rows)
+    lost = sum(g.hours for g in gaps)
+    out = [f"Deployment: {str(t0)[:16]} to {str(t1)[:16]} ({days:.1f} days, {_km(lat, lon):,.0f} km of track)",
+           f"  {'phase':<22}{'phases':>8}{'with images':>13}{'images':>11}"]
+    for k in PHASE_COLOURS:
         mine = [p for p in rows if p["letter"] == k]
-        x0 = mdates.date2num(np.array([p["start"] for p in mine], dtype="datetime64[ns]"))
-        x1 = mdates.date2num(np.array([p["end"] for p in mine], dtype="datetime64[ns]"))
-        has = np.array([p["n_images"] > 0 for p in mine], dtype=bool)
-        width = np.maximum(x1 - x0, 1 / 1440)  # at least one minute, so short phases stay visible
-        if has.any():
-            ax.broken_barh(list(zip(x0[has], width[has])), (i - 0.4, 0.8), facecolors=PHASE_COLOURS[k])
-        if (~has).any():
-            ax.broken_barh(list(zip(x0[~has], width[~has])), (i - 0.4, 0.8),
-                           facecolors="0.85", edgecolors="#b3261e", linewidth=0.6)
-    ax.set_yticks(range(len(letters)), [f"{k} – {PHASE_NAMES[k]}" for k in letters])
-    ax.invert_yaxis()
+        out.append(f"  {k + ' - ' + PHASE_NAMES[k]:<22}{len(mine):>8}{sum(p['n_images'] > 0 for p in mine):>13}"
+                   f"{sum(p['n_images'] for p in mine):>11,}")
+    out.append(f"  {'all':<22}{len(rows):>8}{sum(p['n_images'] > 0 for p in rows):>13}"
+               f"{sum(p['n_images'] for p in rows):>11,}")
+    out.append(f"Coverage gaps (>= {min_hours:g} h without UVP image): {len(gaps)}, {lost:.1f} h in all "
+               f"({100 * lost / 24 / days:.0f} % of the deployment)" + (", listed in qc_coverage.csv" if gaps else ""))
+    for k, g in enumerate(gaps, start=1):
+        r = g.row(k)
+        out.append(f"  {r['gap']}  {r['start'][:16]} to {r['end'][:16]}  {r['duration_h']} h  "
+                   f"from {r['start_lat']}, {r['start_lon']} to {r['end_lat']}, {r['end_lon']}  "
+                   f"{r['distance_km']} km  {r['phases']} phases")
+    if short:
+        n = Counter(p["letter"] for g in short for p in g.phases)
+        out.append(f"  and {sum(len(g.phases) for g in short)} phase(s) without image in shorter runs, not gaps ("
+                   + ", ".join(f"{n[k]} {k}" for k in PHASE_COLOURS if n[k]) + ")")
+    return out
+
+
+def write_coverage_csv(out: Path, gaps: Sequence[CoverageGap]) -> Path:
+    """qc_coverage.csv: one row per gap (header only when there is none)."""
+    path = out / "qc_coverage.csv"
+    fields = ["gap", "start", "end", "duration_h", "start_lat", "start_lon", "end_lat", "end_lon",
+              "distance_km", "phases", *PHASE_COLOURS]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(g.row(k) for k, g in enumerate(gaps, start=1))
+    return path
+
+
+def plot_coverage_map(out: Path, phases: Sequence[dict], gaps: Sequence[CoverageGap],
+                      min_hours: float = MIN_GAP_HOURS) -> tuple[Path, str]:
+    """The ALR track seen from above, coloured by phase type where the UVP has
+    images and red where it has none; below, every phase on a time line."""
+    rows = [p for p in phases if p["start"] is not None]
+    n_miss = sum(p["n_images"] == 0 for p in rows)
+    lost = sum(g.hours for g in gaps)
+    summary = (f"{len(rows) - n_miss} of {len(rows)} ALR phases have UVP images; "
+               f"{len(gaps)} gap{'s' if len(gaps) != 1 else ''} of >= {min_hours:g} h without image ({lost:.1f} h)")
+
+    fig = plt.figure(figsize=(13, 10), constrained_layout=True)
+    gs = fig.add_gridspec(2, 1, height_ratios=[4, 1])
+    ax = fig.add_subplot(gs[0])
+    for p in rows:
+        if p.get("track_lat") is None or not len(p["track_lat"]):
+            continue
+        if p["n_images"] > 0:
+            ax.plot(p["track_lon"], p["track_lat"], "-", lw=1, color=PHASE_COLOURS[p["letter"]], zorder=2)
+        else:
+            ax.plot(p["track_lon"], p["track_lat"], "-", lw=2.5, color=C_GAP, zorder=3)
+    t, lat, lon = _track(rows)
+    if lat.size:
+        ax.plot(lon[0], lat[0], "^", ms=10, color="black", zorder=5)
+        ax.annotate(f"start {str(t[0])[:10]}", (lon[0], lat[0]), xytext=(8, -12), textcoords="offset points", fontsize=9)
+        ax.plot(lon[-1], lat[-1], "s", ms=9, color="black", zorder=5)
+        ax.annotate(f"end {str(t[-1])[:10]}", (lon[-1], lat[-1]), xytext=(8, 4), textcoords="offset points", fontsize=9)
+        ax.set_aspect(1 / np.cos(np.radians(np.nanmean(lat))))  # metres east = metres north
+    when = lambda t: np.datetime64(t, "s").item().strftime("%d %b %H:%M")
+    for k, g in enumerate(gaps, start=1):
+        if g.lat.size:
+            ax.plot(g.lon, g.lat, "-", lw=2.5, color=C_GAP, zorder=3)
+            # open circle where the UVP images stop, filled where they start again
+            for i, mfc, label, dy in ((0, "white", f"G{k} from {when(g.start)}", 8), (-1, C_GAP, f"G{k} to {when(g.end)}", -16)):
+                ax.plot(g.lon[i], g.lat[i], "o", ms=7, mfc=mfc, mec=C_GAP, mew=1.5, zorder=6)
+                ax.annotate(label, (g.lon[i], g.lat[i]), xytext=(-10, dy), textcoords="offset points", ha="right",
+                            fontsize=9, color=C_GAP, fontweight="bold", zorder=7,
+                            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85))
+    handles = [plt.Line2D([], [], color=PHASE_COLOURS[k], lw=2, label=f"{k} – {PHASE_NAMES[k]}") for k in PHASE_COLOURS]
+    if n_miss:
+        handles.append(plt.Line2D([], [], color=C_GAP, lw=2.5, label="no UVP image"))
+    ax.legend(handles=handles, loc="best", fontsize=9)
+    ax.grid(True, color="0.9")
+    ax.set_xlabel("Longitude (°)")
+    ax.set_ylabel("Latitude (°)")
+    fig.suptitle(f"QC – UVP coverage: {summary}", x=0.01, ha="left", fontweight="bold",
+                 color=C_GAP if gaps else "black")
+
+    tl = fig.add_subplot(gs[1])
+    x0 = mdates.date2num(np.array([p["start"] for p in rows], dtype="datetime64[ns]"))
+    x1 = mdates.date2num(np.array([p["end"] for p in rows], dtype="datetime64[ns]"))
+    width = np.maximum(x1 - x0, 1 / 1440)  # at least one minute, so short phases stay visible
+    colours = [PHASE_COLOURS[p["letter"]] if p["n_images"] > 0 else C_GAP for p in rows]
+    tl.broken_barh(list(zip(x0, width)), (0, 1), facecolors=colours)
+    for k, g in enumerate(gaps, start=1):
+        # the gap itself, from the last UVP image to the next one, above the phases
+        g0, g1 = mdates.date2num(np.array([g.start, g.end], dtype="datetime64[ns]"))
+        tl.broken_barh([(g0, g1 - g0)], (1.08, 0.12), facecolors=C_GAP)
+        tl.annotate(f"G{k}", ((g0 + g1) / 2, 1.2), xytext=(0, 2), textcoords="offset points", ha="center",
+                    va="bottom", fontsize=9, color=C_GAP, fontweight="bold")
+    tl.set_ylim(0, 1.6)
+    tl.set_yticks([])
     locator = mdates.AutoDateLocator()
-    ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
-    ax.grid(True, axis="x", color="0.9")
-    detail = ", ".join(f"{by_type[k]} {k}" for k in letters if by_type[k])
-    summary = f"{n_all - n_miss} of {n_all} ALR phases have UVP images; {n_miss} have none" + (f" ({detail})" if detail else "")
-    ax.set_title(f"QC – phase coverage: {summary}\nColoured: phase with UVP images; grey with red outline: no UVP image",
-                 loc="left")
-    fig.canvas.manager.set_window_title("QC – phase coverage")
-    path = out / "uvp_alr_phase_coverage.png"
+    tl.xaxis.set_major_locator(locator)
+    tl.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+    tl.grid(True, axis="x", color="0.9")
+    tl.set_title("Every ALR phase on a time line: coloured by type when it has UVP images, red when it has none; "
+                 "above, the gaps from the last UVP image to the next", loc="left", fontsize=10)
+    fig.canvas.manager.set_window_title("QC – UVP coverage")
+    path = out / "uvp_alr_coverage_map.png"
     fig.savefig(path, dpi=150)
     plt.close(fig)
     return path, summary
@@ -259,8 +440,10 @@ def run_alr_qc(outdir, uvp_time_series: Sequence, uvp_depth_series: Sequence, ma
         lines += [f"  WARNING: {w}" for w in agr.warnings()]
 
     if match.phases:
-        written["phase_coverage"], summary = plot_phase_coverage(out, match.phases)
-        lines.append(f"Phase coverage: {summary}")
+        gaps, short = coverage_gaps(match.phases, t_uvp)
+        written["coverage_map"], _ = plot_coverage_map(out, match.phases, gaps)
+        written["coverage_csv"] = write_coverage_csv(out, gaps)
+        lines += coverage_table(match.phases, gaps, short)
     if samples:
         written["sample_sizes"], summary = plot_sample_sizes(out, samples, min_images)
         lines.append(f"Sample sizes: {summary}")

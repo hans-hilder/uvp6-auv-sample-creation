@@ -127,8 +127,9 @@ Near the end of cell 4, two lines summarise the matching:
 ├── daily_plots/uvp_alr_timedepth_<date>.png
 ├── overview_plots/uvp_alr_timedepth_all_days.png
 ├── uvp_alr_depth_agreement.png               # cell 4, quality checks
-├── uvp_alr_phase_coverage.png
+├── uvp_alr_coverage_map.png
 ├── uvp_alr_sample_sizes.png
+├── qc_coverage.csv
 └── qc_summary.txt
 ```
 
@@ -156,13 +157,16 @@ t transect (green), s surface transect (yellow), x transition (dark grey).
 | --- | --- | --- |
 | `ALR004_phase_detection.png` | Depth, the two detection criteria (smoothed vertical velocity, and M = −pitch × vertical velocity) with their thresholds as grey bands, the pitch, and the profile numbering before/after the duration and back-fill filters. | Why a record got its phase; whether the thresholds suit the deployment. |
 | `ALR004_phase_sectioning.png` | The deployment coloured by phase, the count of each phase type, and one block per phase (one phase = one netCDF file = one sample), with the segment boundaries. | Each dive split into a downcast and an upcast, no missed profile, no fragmented transect. |
-| `uvp_alr_timedepth.png`, `…_fullspan.png`, `daily_plots/`, `overview_plots/` | UVP6 (dots) and ALR (line) depth, the UVP − ALR depth difference (10 s medians), and, in `…_fullspan.png`, the ALR → UVP clock offset of each 31 × 10 s window, coloured by r²; the median over reliable windows (r² ≥ 0.9) is printed and drawn. | A constant depth difference points to a pressure offset, a difference growing with depth to a scale difference, and a non-zero median offset to a clock offset. |
+| `uvp_alr_timedepth.png`, `…_fullspan.png`, `daily_plots/`, `overview_plots/` | UVP6 (dots) and ALR (line) depth, the UVP − ALR depth difference (10 s medians), and, in `…_fullspan.png`, the ALR → UVP clock offset of each 31 × 10 s window, coloured by r²; the median over reliable windows (r² ≥ 0.9) is printed and drawn. The ALR depth is drawn over the whole deployment, and the gaps of the coverage map are shaded red. | A constant depth difference points to a pressure offset, a difference growing with depth to a scale difference, and a non-zero median offset to a clock offset. |
 | `uvp_alr_sampling_intervals.png` | Distribution of the time between two UVP6 images and two ALR records. | Gaps or irregular sampling. |
 | `uvp_alr_depth_agreement.png` | UVP − ALR depth against ALR depth (10 s medians), with the fit UVP − ALR = scale × depth + offset + lag × vertical velocity, over the deployment and per day. | A WARNING when \|scale\| > 0.5 %, \|offset\| > 0.5 m or \|lag\| > 1 s. A scale near +1.97 % is what a UVP depth in mH₂O against an ALR pressure in dbar gives. A lag that grows day after day is a drifting clock. |
-| `uvp_alr_phase_coverage.png` | Every ALR phase on a time line, by type: coloured when it has UVP6 images, light grey with a red outline when it has none. | Periods without UVP6 data; phases that should have had images. |
+| `uvp_alr_coverage_map.png` | The ALR track seen from above, coloured by phase type where the UVP6 has images and red where it has none, with the time and position where each gap starts and ends; below, every phase on a time line. | Where and when the UVP6 did not record. A gap runs from the last UVP6 image before it to the first one after it, and is listed when it lasts 1 h or more (`MIN_GAP_HOURS` in `qc.py`). |
 | `uvp_alr_sample_sizes.png` | Images per sample, by phase type, with the `qc_min_images` limit of `create_samples` (20 by default). | Very small samples, usually transitions, not worth processing in UVPapp. |
 
-The quality checks of cell 4 are also printed and written to `qc_summary.txt`. Cell 2 prints the
+The quality checks of cell 4 are also printed and written to `qc_summary.txt`: the depth agreement, the deployment
+(start, end, track length), a table of the phases by type (number, number with images, images) and the gaps. The
+gaps are also in `qc_coverage.csv`: start and end time, duration, start and end position, track length and the
+phases by type. Cell 2 prints the
 phase checks of `alr_plots.check_phases`: the duration of each phase type, a warning for a segment
 without an upcast, and a warning for a transition longer than 30 min.
 
