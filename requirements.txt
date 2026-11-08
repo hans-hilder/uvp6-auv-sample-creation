@@ -6,3 +6,4 @@ xarray
 netCDF4>=1.6
 matplotlib>=3.7
 ipykernel  # Run Cell / Interactive Window in VS Code (Jupyter extension)
+streamlit>=1.40  # the app (app.py, start_app.bat)
