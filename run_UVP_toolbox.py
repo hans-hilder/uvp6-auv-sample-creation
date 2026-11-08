@@ -29,13 +29,13 @@ PHASE_DETECTION = dict(gradient_thresholds=[0.05, -0.05],
 # (d, u, x) and time bin (s) of the time-integrated samples (t, s)
 DEPTH_INTEGRATION = 5
 TIME_INTEGRATION = 3600
-# Folders of a UVPapp project, created in cell 3 when missing
+# Folders of a UVPapp project, checked in cell 3: the pipeline does not create them
 UVP_PROJECT_DIRS = ("calibration", "config", "CTDdata", "doc", "ecodata",
                     "livecamera", "log", "meta", "raw", "results")
 
 prompter = TkPrompter()
 # ==========
-# %% 1. Load and parse the ALR CTD and navigation (NAV) files
+# %% 1. Load and parse the ALR data (CTD and NAV)
 # ==========
 ctd_dir = prompter.choose_directory(
     "Select the ALR CTD files folder")
@@ -85,12 +85,14 @@ project = prompter.choose_directory("Select the UVP6 project folder")
 assert project is not None, "cancelled"
 project = Path(project)
 
+# A complete UVPapp project is expected (as ALR4_demo): its folders are not created here
+missing = [d for d in UVP_PROJECT_DIRS if not (project / d).is_dir()]
+assert not missing, f"Not a complete UVPapp project, missing folder(s): {', '.join(missing)}"
+
 # The ALR netCDFs go to meta/, next to the sample file: raw, config and meta
 # are the folders kept and backed up for a UVP project
 meta_dir = project / "meta" / f"alr_meta_sn{ALR_SERIAL_NUMBER:03d}"
-for d in UVP_PROJECT_DIRS:
-    (project / d).mkdir(parents=True, exist_ok=True)
-meta_dir.mkdir(parents=True, exist_ok=True)
+meta_dir.mkdir(exist_ok=True)
 
 cruise_info = project / "config" / "cruise_info.txt"
 if not cruise_info.exists():
