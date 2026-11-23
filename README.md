@@ -12,8 +12,9 @@ data as simple CSV files.
   ([ORCID 0000-0001-6724-9095](https://orcid.org/0000-0001-6724-9095)), National Oceanography Centre, Southampton, UK.
   To cite the code, use **Cite this repository** on this page ([`CITATION.cff`](CITATION.cff)).
 - **Protocol**: to be published in the [Ocean Best Practices System](https://repository.oceanbestpractices.org) (DOI to come).
-- **Demo data**: [ALR4_demo.zip](https://github.com/amandaelineau-stack/ALR_UVP_Processing/releases/download/ALR4_demo/ALR4_demo.zip)
-  (233 MB): ALR CTD and NAV files and a complete UVP6 project.
+- **Demo data**: [ALR4_demo.zip](https://github.com/hans-hilder/uvp6-auv-sample-creation/releases/tag/v1.0_demodataset)
+  (231 MB): ALR CTD and NAV files, a complete UVP6 project, and the outputs of a run (sample
+  file, phase netCDFs, CTD files and figures). Running it again archives these outputs.
 - **Details** (settings, outputs, quality-control figures): [docs/details.md](docs/details.md).
 
 ## Install (once, Windows)
